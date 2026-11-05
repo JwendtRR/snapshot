@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Smooth Driver</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #e6e9e4;
+  --ink: #17222a;
+  --muted: #56636b;
+  --track: #c9cfc8;
+  --panel: #f4f6f2;
+  --line: #b9c1ba;
+  --calm: #0d7a55;
+  --warn: #e0a000;
+  --stop: #d22a3c;
+  --btn-ink: #ffffff;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #141c22;
+    --ink: #eef2ee;
+    --muted: #93a1a8;
+    --track: #26323a;
+    --panel: #1c262d;
+    --line: #32414a;
+    --calm: #23b07c;
+    --warn: #f2b400;
+    --stop: #ff3b4e;
+    --btn-ink: #0d1418;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141c22;
+  --ink: #eef2ee;
+  --muted: #93a1a8;
+  --track: #26323a;
+  --panel: #1c262d;
+  --line: #32414a;
+  --calm: #23b07c;
+  --warn: #f2b400;
+  --stop: #ff3b4e;
+  --btn-ink: #0d1418;
+}
+*, *::before, *::after { box-sizing: inherit; }
+html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--ink);
+  font-family: "Overpass", "Helvetica Neue", Arial, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none; user-select: none;
+  overflow-x: hidden;
+}
+button { font: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
+
+/* Full-screen tint so you can catch it in peripheral vision */
+#tint {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  opacity: 0; transition: opacity .25s ease, background-color .25s ease;
+}
+body[data-level="1"] #tint { background: var(--warn); opacity: .28; }
+body[data-level="2"] #tint { background: var(--stop); opacity: .55; transition-duration: .08s; }
+
+.app {
+  position: relative; z-index: 1;
+  max-width: 520px; margin: 0 auto; min-height: 100%;
+  padding: 16px 20px 24px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+/* Start screen */
+#intro h1 { font-size: 2.4rem; font-weight: 900; line-height: 1; margin: 18px 0 10px; letter-spacing: -.02em; }
+#intro p { color: var(--muted); line-height: 1.55; margin: 0 0 12px; font-size: 1.02rem; }
+#intro ol { padding-left: 1.2em; margin: 0 0 18px; line-height: 1.55; }
+#intro li { margin-bottom: 8px; }
+.primary {
+  display: block; width: 100%;
+  background: var(--calm); color: var(--btn-ink);
+  border: 0; border-radius: 14px; padding: 18px;
+  font-size: 1.25rem; font-weight: 800;
+}
+.secondary {
+  background: transparent; color: var(--ink);
+  border: 2px solid var(--line); border-radius: 12px;
+  padding: 10px 14px; font-weight: 600; font-size: .95rem;
+}
+#err { color: var(--stop); font-weight: 600; margin-top: 12px; line-height: 1.45; }
+
+/* Driving screen */
+#drive { display: none; flex: 1; flex-direction: column; gap: 14px; }
+body.running #drive { display: flex; }
+body.running #intro { display: none; }
+
+.status { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: .95rem; }
+.status #mode { color: var(--muted); }
+.status #speed { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem; white-space: nowrap; }
+
+.meter { display: flex; gap: 18px; align-items: stretch; flex: 1; min-height: 300px; }
+.gauge {
+  position: relative; width: 74px; flex: none;
+  background: var(--track); border-radius: 37px; overflow: hidden;
+}
+.gauge .fill {
+  position: absolute; left: 0; right: 0;
+  background: var(--calm); transition: background-color .15s;
+}
+body[data-level="1"] .gauge .fill { background: var(--warn); }
+body[data-level="2"] .gauge .fill { background: var(--stop); }
+.gauge .zero { position: absolute; left: 10px; right: 10px; top: 50%; height: 3px; margin-top: -1.5px; background: var(--ink); opacity: .5; }
+.gauge .mark { position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); opacity: .35; }
+.gauge .mark.limit { height: 4px; background: var(--stop); opacity: .9; }
+
+.readout { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+.readout .dir { font-size: 1rem; color: var(--muted); }
+.readout .dir.up::before { content: "▲ "; }
+.readout .dir.down::before { content: "▼ "; }
+#num {
+  font-size: clamp(5rem, 28vw, 8.5rem); font-weight: 900;
+  line-height: .85; letter-spacing: -.04em; font-variant-numeric: tabular-nums;
+}
+#unit { font-size: 1.1rem; font-weight: 600; color: var(--muted); margin-top: 6px; }
+#dirText { font-size: 1.35rem; font-weight: 800; margin-top: 10px; min-height: 1.6em; }
+
+.tally { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.tally div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.tally b { display: block; font-size: 1.7rem; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.tally span { font-size: .8rem; color: var(--muted); }
+
+.controls { display: flex; gap: 10px; flex-wrap: wrap; }
+.controls .stop { margin-left: auto; border-color: var(--stop); color: var(--stop); }
+
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+summary { font-weight: 700; }
+.setting { margin-top: 14px; }
+.setting label { display: flex; justify-content: space-between; font-size: .95rem; margin-bottom: 6px; }
+.setting output { font-weight: 800; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--calm); }
+.check { display: flex; gap: 10px; align-items: center; margin-top: 14px; font-size: .95rem; }
+.check input { width: 22px; height: 22px; accent-color: var(--calm); }
+.note { color: var(--muted); font-size: .85rem; line-height: 1.45; margin: 10px 0 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  #tint, .gauge .fill { transition: none; }
+}
+</style>
+</head>
+<body data-level="0">
+<div id="tint"></div>
+<main class="app">
+
+  <section id="intro">
+    <h1>Smooth Driver</h1>
+    <p>A chime when you’re getting close to a hard brake or fast start, before Snapshot counts one. Snapshot’s line is about 7 mph per second.</p>
+    <ol>
+      <li>Mount this phone firmly, in any position. If it slides, you’ll get false alerts.</li>
+      <li>Turn the ringer switch on and the volume up.</li>
+      <li>Tap Start and allow motion and location. Leave this screen open.</li>
+      <li>Drive normally for a few minutes. It learns which way is forward from your first few starts and stops.</li>
+    </ol>
+    <button class="primary" id="startBtn">Start</button>
+    <div id="err" role="alert"></div>
+  </section>
+
+  <section id="drive" aria-live="off">
+    <div class="status">
+      <span id="mode">Learning which way is forward…</span>
+      <span id="speed">— mph</span>
+    </div>
+
+    <div class="meter">
+      <div class="gauge" id="gauge" aria-hidden="true">
+        <div class="fill" id="fill"></div>
+        <div class="zero"></div>
+      </div>
+      <div class="readout">
+        <div class="dir up">Speeding up</div>
+        <div>
+          <div id="num">0.0</div>
+          <div id="unit">mph per second</div>
+          <div id="dirText">Smooth</div>
+        </div>
+        <div class="dir down">Slowing down</div>
+      </div>
+    </div>
+
+    <div class="tally">
+      <div><b id="cWarn">0</b><span>Chimes</span></div>
+      <div><b id="cClose">0</b><span>Close calls</span></div>
+      <div><b id="cPeak">0.0</b><span>Peak mph/s</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="secondary" id="testBtn">Test sounds</button>
+      <button class="secondary" id="resetBtn">Reset trip</button>
+      <button class="secondary stop" id="stopBtn">Stop</button>
+    </div>
+
+    <details>
+      <summary>Settings</summary>
+      <div class="setting">
+        <label for="sWarn">Gentle chime at <output id="oWarn"></output></label>
+        <input type="range" id="sWarn" min="3" max="6.5" step="0.5">
+      </div>
+      <div class="setting">
+        <label for="sAlert">Loud alert at <output id="oAlert"></output></label>
+        <input type="range" id="sAlert" min="4" max="7" step="0.5">
+      </div>
+      <label class="check"><input type="checkbox" id="sSound"> Sound on</label>
+      <button class="secondary" id="recalBtn" style="margin-top:14px">Relearn forward direction</button>
+      <p class="note">Use “Relearn” if you move the phone. Until it has learned forward, sharp turns can set off the chime too. Readings from a phone are approximate, so the alert sits a little under Snapshot’s 7 mph per second line on purpose.</p>
+    </details>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const MPHS = 0.44704; // 1 mph/s in m/s²
+  const $ = id => document.getElementById(id);
+
+  // ---------- settings ----------
+  const settings = { warn: 5, alert: 6.5, sound: true };
+  try {
+    const saved = JSON.parse(localStorage.getItem("smoothDriverSettings") || "null");
+    if (saved) Object.assign(settings, saved);
+  } catch (e) {}
+  function saveSettings() {
+    try { localStorage.setItem("smoothDriverSettings", JSON.stringify(settings)); } catch (e) {}
+  }
+  function showSettings() {
+    $("sWarn").value = settings.warn; $("oWarn").textContent = settings.warn.toFixed(1);
+    $("sAlert").value = settings.alert; $("oAlert").textContent = settings.alert.toFixed(1);
+    $("sSound").checked = settings.sound;
+    drawMarks();
+  }
+  $("sWarn").addEventListener("input", e => {
+    settings.warn = +e.target.value;
+    if (settings.alert < settings.warn + 0.5) settings.alert = Math.min(7, settings.warn + 0.5);
+    saveSettings(); showSettings();
+  });
+  $("sAlert").addEventListener("input", e => {
+    settings.alert = +e.target.value;
+    if (settings.warn > settings.alert - 0.5) settings.warn = Math.max(3, settings.alert - 0.5);
+    saveSettings(); showSettings();
+  });
+  $("sSound").addEventListener("change", e => { settings.sound = e.target.checked; saveSettings(); });
+
+  // ---------- gauge ----------
+  const RANGE = 10; // mph/s shown at each end
+  function pct(v) { return 50 - (Math.max(-RANGE, Math.min(RANGE, v)) / RANGE) * 50; }
+  function drawMarks() {
+    const g = $("gauge");
+    g.querySelectorAll(".mark").forEach(m => m.remove());
+    [settings.warn, -settings.warn, settings.alert, -settings.alert, 7, -7].forEach((v, i) => {
+      const m = document.createElement("div");
+      m.className = "mark" + (Math.abs(v) === 7 ? " limit" : "");
+      m.style.top = pct(v) + "%";
+      g.appendChild(m);
+    });
+  }
+
+  // ---------- audio ----------
+  let ctx = null;
+  function unlockAudio() {
+    try {
+      if (navigator.audioSession) navigator.audioSession.type = "playback";
+    } catch (e) {}
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      ctx.resume();
+      const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
+      s.buffer = b; s.connect(ctx.destination); s.start(0);
+    } catch (e) {}
+  }
+  function tone(freq, start, dur, vol, type) {
+    if (!ctx) return;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    const t = ctx.currentTime + start;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  function chime() { if (settings.sound) { tone(784, 0, 0.45, 0.35); tone(1175, 0.12, 0.5, 0.25); } }
+  function alarm() { if (settings.sound) { [0, 0.16, 0.32].forEach(s => tone(1320, s, 0.12, 0.6, "square")); } }
+
+  // ---------- wake lock ----------
+  let wakeLock = null;
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && running) { keepAwake(); if (ctx) ctx.resume(); }
+  });
+
+  // ---------- motion processing ----------
+  let running = false, geoId = null;
+  let grav = null, lastT = 0, useBuiltInLinear = null;
+  let shortBuf = [], longBuf = [];
+  let fwdAcc = [0, 0, 0], fwdCount = 0;
+  let gps = [];
+  let value = 0, directional = false;
+  let level = 0, warnCount = 0, closeCount = 0, peak = 0;
+
+  const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  const len = a => Math.sqrt(dot(a, a));
+  const scale = (a, k) => [a[0]*k, a[1]*k, a[2]*k];
+  const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+  function mean(buf, from) {
+    let s = [0, 0, 0], n = 0;
+    for (const p of buf) if (p.t >= from) { s = add(s, p.h); n++; }
+    return n ? scale(s, 1 / n) : null;
+  }
+
+  function onMotion(e) {
+    const aig = e.accelerationIncludingGravity;
+    if (!aig || aig.x == null) return;
+    const now = performance.now() / 1000;
+    const dt = lastT ? Math.min(0.2, now - lastT) : 0.016;
+    lastT = now;
+    const g = [aig.x, aig.y, aig.z];
+
+    if (!grav) grav = g.slice();
+    const k = dt / (2.0 + dt);
+    grav = add(grav, scale(sub(g, grav), k));
+
+    if (useBuiltInLinear === null) useBuiltInLinear = !!(e.acceleration && e.acceleration.x != null);
+    const lin = useBuiltInLinear && e.acceleration && e.acceleration.x != null
+      ? [e.acceleration.x, e.acceleration.y, e.acceleration.z]
+      : sub(g, grav);
+
+    const gl = len(grav) || 1;
+    const gh = scale(grav, 1 / gl);
+    const h = sub(lin, scale(gh, dot(lin, gh))); // horizontal part only
+
+    shortBuf.push({ t: now, h }); longBuf.push({ t: now, h });
+    while (shortBuf.length && shortBuf[0].t < now - 0.6) shortBuf.shift();
+    while (longBuf.length && longBuf[0].t < now - 4) longBuf.shift();
+
+    const hm = mean(shortBuf, now - 0.6) || [0, 0, 0];
+    const fl = len(fwdAcc);
+    directional = fwdCount >= 4 && fl > 0.5;
+    value = directional ? dot(hm, scale(fwdAcc, 1 / fl)) / MPHS : len(hm) / MPHS;
+
+    evaluate(Math.abs(value));
+  }
+
+  function evaluate(mag) {
+    if (mag > peak) peak = mag;
+    let next = level;
+    if (mag >= settings.alert) next = 2;
+    else if (mag >= settings.warn) next = Math.max(level, 1);
+    else if (mag < settings.warn - 0.7) next = 0;
+
+    if (next > level) {
+      if (level === 0) warnCount++;
+      if (next === 2) { closeCount++; alarm(); }
+      else chime();
+    }
+    level = next;
+  }
+
+  // ---------- GPS: speed + learning forward ----------
+  function onPos(p) {
+    const now = performance.now() / 1000;
+    const v = p.coords.speed;
+    $("speed").textContent = v != null && v >= 0 ? Math.round(v / MPHS) + " mph" : "— mph";
+    if (v == null || v < 0) return;
+    gps.push({ t: now, v });
+    while (gps.length && gps[0].t < now - 6) gps.shift();
+
+    const old = gps.find(s => s.t >= now - 2.5 && s.t <= now - 1.2);
+    if (!old) return;
+    const dvdt = (v - old.v) / (now - old.t);
+    if (Math.abs(dvdt) < 0.9 || Math.max(v, old.v) < 1.5) return;
+    const hmean = mean(longBuf, old.t);
+    if (!hmean || len(hmean) < 0.35) return;
+    const contrib = scale(hmean, Math.sign(dvdt) / len(hmean));
+    // keep learning, but let older samples fade a little
+    fwdAcc = add(scale(fwdAcc, fwdCount >= 20 ? 0.95 : 1), contrib);
+    fwdCount++;
+  }
+
+  // ---------- display loop ----------
+  function render() {
+    if (!running) return;
+    const v = value;
+    const mag = Math.abs(v);
+    $("num").textContent = mag.toFixed(1);
+    const fill = $("fill");
+    if (directional) {
+      const top = Math.min(pct(v), 50), bottom = Math.max(pct(v), 50);
+      fill.style.top = top + "%"; fill.style.height = (bottom - top) + "%";
+      $("mode").textContent = "Ready";
+      $("dirText").textContent = mag < 1 ? "Smooth" : (v > 0 ? "Speeding up" : "Slowing down");
+    } else {
+      const off = (mag / RANGE) * 50;
+      fill.style.top = (50 - Math.min(50, off)) + "%";
+      fill.style.height = Math.min(100, off * 2) + "%";
+      $("mode").textContent = "Learning which way is forward…";
+      $("dirText").textContent = mag < 1 ? "Smooth" : "Moving";
+    }
+    document.body.dataset.level = level;
+    $("cWarn").textContent = warnCount;
+    $("cClose").textContent = closeCount;
+    $("cPeak").textContent = peak.toFixed(1);
+    requestAnimationFrame(render);
+  }
+
+  // ---------- start / stop ----------
+  async function start() {
+    $("err").textContent = "";
+    unlockAudio();
+    try {
+      if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+        const r = await DeviceMotionEvent.requestPermission();
+        if (r !== "granted") {
+          $("err").textContent = "Motion access was turned down. In Safari, tap the “aA” button, choose Website Settings, and allow Motion & Orientation Access. Then tap Start again.";
+          return;
+        }
+      }
+    } catch (e) {
+      $("err").textContent = "Couldn’t ask for motion access. Open this page in Safari and tap Start again.";
+      return;
+    }
+    if (typeof DeviceMotionEvent === "undefined") {
+      $("err").textContent = "This browser doesn’t share motion data. Open the page in Safari on the phone.";
+      return;
+    }
+    window.addEventListener("devicemotion", onMotion);
+    if ("geolocation" in navigator) {
+      geoId = navigator.geolocation.watchPosition(onPos, () => {
+        $("speed").textContent = "No GPS";
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+    }
+    keepAwake();
+    running = true;
+    document.body.classList.add("running");
+    requestAnimationFrame(render);
+  }
+  function stop() {
+    running = false;
+    window.removeEventListener("devicemotion", onMotion);
+    if (geoId != null) navigator.geolocation.clearWatch(geoId);
+    geoId = null;
+    try { if (wakeLock) wakeLock.release(); } catch (e) {}
+    document.body.classList.remove("running");
+    document.body.dataset.level = 0;
+  }
+  function resetTrip() { warnCount = 0; closeCount = 0; peak = 0; level = 0; }
+  function relearn() { fwdAcc = [0, 0, 0]; fwdCount = 0; grav = null; shortBuf = []; longBuf = []; }
+
+  $("startBtn").addEventListener("click", start);
+  $("stopBtn").addEventListener("click", stop);
+  $("resetBtn").addEventListener("click", resetTrip);
+  $("recalBtn").addEventListener("click", relearn);
+  $("testBtn").addEventListener("click", () => {
+    unlockAudio();
+    const was = settings.sound; settings.sound = true;
+    chime(); setTimeout(() => { alarm(); settings.sound = was; }, 900);
+  });
+
+  showSettings();
+})();
+</script>
+</body>
+</html>
