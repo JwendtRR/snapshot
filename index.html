@@ -106,8 +106,21 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px 
 body.running #drive { display: flex; }
 body.running #intro { display: none; }
 
-.status { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: .95rem; }
+.status { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: .95rem; }
+.status .left { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
 .status #mode { color: var(--muted); }
+.src {
+  display: inline-block; padding: 4px 10px; border-radius: 999px;
+  font-weight: 800; font-size: .85rem; letter-spacing: .02em; white-space: nowrap;
+  border: 2px solid var(--line); color: var(--muted);
+}
+.src.gps { background: var(--calm); border-color: var(--calm); color: var(--btn-ink); }
+.src.sensors { border-color: var(--warn); color: var(--ink); }
+.soundbar {
+  display: block; width: 100%; text-align: left;
+  background: var(--warn); color: #17222a; border: 0; border-radius: 12px;
+  padding: 12px 14px; font-weight: 800; font-size: 1rem; line-height: 1.35;
+}
 .status #speed { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem; white-space: nowrap; }
 
 .meter { display: flex; gap: 18px; align-items: stretch; flex: 1; min-height: 300px; }
@@ -178,9 +191,14 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
 
   <section id="drive" aria-live="off">
     <div class="status">
-      <span id="mode">Learning which way is forward…</span>
+      <div class="left">
+        <span class="src" id="src">Waiting for GPS</span>
+        <span id="mode">Learning forward…</span>
+      </div>
       <span id="speed">— mph</span>
     </div>
+
+    <button class="soundbar" id="soundFix" hidden>Sound is paused. Tap here to turn it back on.</button>
 
     <div class="meter">
       <div class="gauge" id="gauge" aria-hidden="true">
@@ -226,6 +244,7 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
       </div>
       <label class="check"><input type="checkbox" id="sSound"> Sound on</label>
       <button class="secondary" id="recalBtn" style="margin-top:14px">Relearn forward direction</button>
+      <p class="note"><b>GPS + sensors</b>: the motion sensor gives the early warning, and GPS speed changes catch long, steady speed-ups or slow-downs that the sensor can miss. It also ignores sudden stops from walking speed, since you can’t lose 7 mph in a second when you’re only going 3. <b>Sensors only</b> means GPS isn’t giving a speed right now, so readings are less reliable.</p>
       <p class="note">Use “Relearn” if you move the phone. Until it has learned forward, sharp turns can set off the chime too. Readings from a phone are approximate, so the alert sits a little under Snapshot’s 7 mph per second line on purpose.</p>
     </details>
   </section>
@@ -289,14 +308,25 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
       if (navigator.audioSession) navigator.audioSession.type = "playback";
     } catch (e) {}
     try {
-      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (!ctx || ctx.state === "closed") newContext();
       ctx.resume();
       const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
       s.buffer = b; s.connect(ctx.destination); s.start(0);
     } catch (e) {}
   }
+  function newContext() {
+    try { if (ctx && ctx.state !== "closed") ctx.close(); } catch (e) {}
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // A silent, always-running source keeps the phone from parking the audio
+    try { const k = ctx.createConstantSource(); k.offset.value = 0; k.connect(ctx.destination); k.start(); } catch (e) {}
+  }
+  const soundOk = () => !!ctx && ctx.state === "running";
+  // Any tap on the page counts as permission to restart sound
+  document.addEventListener("pointerdown", () => { if (running && !soundOk()) unlockAudio(); }, true);
+  $("soundFix").addEventListener("click", unlockAudio);
   function tone(freq, start, dur, vol, type) {
     if (!ctx) return;
+    if (ctx.state !== "running") { try { ctx.resume(); } catch (e) {} }
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type || "sine"; o.frequency.value = freq;
     const t = ctx.currentTime + start;
@@ -314,8 +344,16 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
   async function keepAwake() {
     try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
   }
+  let wasHidden = false;
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && running) { keepAwake(); if (ctx) ctx.resume(); }
+    if (document.visibilityState === "hidden") { wasHidden = true; return; }
+    if (!running) return;
+    keepAwake();
+    // After the page has been in the background, iPhone audio can go silent
+    // while claiming to work, so start a fresh sound engine. If the phone
+    // wants a tap first, the yellow bar asks for one.
+    if (wasHidden) { wasHidden = false; try { newContext(); ctx.resume(); } catch (e) {} }
+    else if (ctx) ctx.resume();
   });
 
   // ---------- motion processing ----------
@@ -324,7 +362,8 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
   let shortBuf = [], longBuf = [];
   let fwdAcc = [0, 0, 0], fwdCount = 0;
   let gps = [];
-  let value = 0, directional = false;
+  let value = 0, directional = false, signKnown = false;
+  let gpsAccel = 0, gpsFresh = false, lastFixT = -99;
   let level = 0, warnCount = 0, closeCount = 0, peak = 0;
   // Screen tint: holds the strongest level of the latest event, then fades out
   const FADE = 1.5; // seconds
@@ -349,12 +388,16 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     lastT = now;
     const g = [aig.x, aig.y, aig.z];
 
-    if (!grav) grav = g.slice();
-    const k = dt / (2.0 + dt);
-    grav = add(grav, scale(sub(g, grav), k));
-
     if (useBuiltInLinear === null) useBuiltInLinear = !!(e.acceleration && e.acceleration.x != null);
-    const lin = useBuiltInLinear && e.acceleration && e.acceleration.x != null
+    const builtIn = useBuiltInLinear && e.acceleration && e.acceleration.x != null;
+    // With the phone's own split (iPhone), gravity = total minus motion, which
+    // holds up during long, steady acceleration. Otherwise, a slow average.
+    const gRaw = builtIn ? sub(g, [e.acceleration.x, e.acceleration.y, e.acceleration.z]) : g;
+    if (!grav) grav = gRaw.slice();
+    const tau = builtIn ? 0.3 : 2.0;
+    grav = add(grav, scale(sub(gRaw, grav), dt / (tau + dt)));
+
+    const lin = builtIn
       ? [e.acceleration.x, e.acceleration.y, e.acceleration.z]
       : sub(g, grav);
 
@@ -369,9 +412,25 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     const hm = mean(shortBuf, now - 0.6) || [0, 0, 0];
     const fl = len(fwdAcc);
     directional = fwdCount >= 4 && fl > 0.5;
-    value = directional ? dot(hm, scale(fwdAcc, 1 / fl)) / MPHS : len(hm) / MPHS;
+    let sensor = directional ? dot(hm, scale(fwdAcc, 1 / fl)) / MPHS : len(hm) / MPHS;
+
+    gpsFresh = now - lastFixT < 2.5;
+    if (gpsFresh) {
+      // Can't lose more speed in a second than you have: going 3 mph, a
+      // sudden stop is at most about 3 mph/s, whatever the jolt feels like.
+      if (directional && sensor < 0) sensor = Math.max(sensor, -(recentMaxMph(now) + 1.5));
+      if (Math.abs(gpsAccel) > Math.abs(sensor)) { value = gpsAccel; signKnown = true; }
+      else { value = sensor; signKnown = directional; }
+    } else {
+      value = sensor; signKnown = directional;
+    }
 
     evaluate(Math.abs(value));
+  }
+  function recentMaxMph(now) {
+    let m = 0;
+    for (const s of gps) if (s.t >= now - 2.5 && s.v > m) m = s.v;
+    return m / MPHS;
   }
 
   function evaluate(mag) {
@@ -441,8 +500,16 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     const v = p.coords.speed;
     $("speed").textContent = v != null && v >= 0 ? Math.round(v / MPHS) + " mph" : "— mph";
     if (v == null || v < 0) return;
-    gps.push({ t: now, v });
+    const ft = (p.timestamp || Date.now()) / 1000; // when the fix was taken
+    gps.push({ t: now, v, ft });
     while (gps.length && gps[0].t < now - 6) gps.shift();
+    lastFixT = now;
+
+    // Speed change over about the last second, the way Snapshot counts it
+    let prev = null;
+    for (let i = gps.length - 2; i >= 0; i--) { if (ft - gps[i].ft >= 0.8) { prev = gps[i]; break; } }
+    if (prev && ft - prev.ft <= 2.2) gpsAccel = (v - prev.v) / (ft - prev.ft) / MPHS;
+    else gpsAccel = 0;
 
     const old = gps.find(s => s.t >= now - 2.5 && s.t <= now - 1.2);
     if (!old) return;
@@ -463,18 +530,22 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     const mag = Math.abs(v);
     $("num").textContent = mag.toFixed(1);
     const fill = $("fill");
-    if (directional) {
+    if (signKnown) {
       const top = Math.min(pct(v), 50), bottom = Math.max(pct(v), 50);
       fill.style.top = top + "%"; fill.style.height = (bottom - top) + "%";
-      $("mode").textContent = "Ready";
       $("dirText").textContent = mag < 1 ? "Smooth" : (v > 0 ? "Speeding up" : "Slowing down");
     } else {
       const off = (mag / RANGE) * 50;
       fill.style.top = (50 - Math.min(50, off)) + "%";
       fill.style.height = Math.min(100, off * 2) + "%";
-      $("mode").textContent = "Learning which way is forward…";
       $("dirText").textContent = mag < 1 ? "Smooth" : "Moving";
     }
+    gpsFresh = performance.now() / 1000 - lastFixT < 2.5;
+    const src = $("src");
+    src.textContent = gpsFresh ? "GPS + sensors" : "Sensors only";
+    src.className = "src " + (gpsFresh ? "gps" : "sensors");
+    $("mode").textContent = directional ? "Ready" : "Learning forward…";
+    $("soundFix").hidden = !(settings.sound && !soundOk());
     document.body.dataset.level = level;
     drawTint();
     $("cWarn").textContent = warnCount;
