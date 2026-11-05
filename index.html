@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" id="themeColor" content="#e6e9e4">
 <title>Smooth Driver</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -67,12 +68,13 @@ button { font: inherit; cursor: pointer; }
 button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
 
 /* Full-screen tint so you can catch it in peripheral vision */
-/* Color and opacity are set from the script so the tint can hold, then fade */
+/* The script sets this layer's solid color, blended from the background toward
+   amber or red. Safari tints its top and bottom bars from this color, so it
+   fades the color itself rather than the opacity, which Safari ignores. */
 #tint {
   position: fixed; inset: 0; pointer-events: none; z-index: 0;
-  opacity: 0; background: var(--warn);
+  background: var(--bg);
 }
-#tint[data-level="2"] { background: var(--stop); }
 
 .app {
   position: relative; z-index: 1;
@@ -402,11 +404,36 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
       else if (!reduceMotion) s = Math.max(0, 1 - (now - tintUntil) / FADE);
       if (s === 0) tintLevel = 0;
     }
-    const t = $("tint");
-    t.dataset.level = tintLevel;
-    t.style.opacity = tintLevel ? ((tintLevel === 2 ? 0.55 : 0.28) * s).toFixed(3) : "0";
+    const c = tintLevel
+      ? mix(palette.bg, tintLevel === 2 ? palette.stop : palette.warn, (tintLevel === 2 ? 0.55 : 0.28) * s)
+      : mix(palette.bg, palette.bg, 0);
+    if (c !== lastTint) {
+      lastTint = c;
+      $("tint").style.backgroundColor = c;
+      $("themeColor").setAttribute("content", c);
+    }
   }
   const reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Theme colors as RGB, re-read when the phone switches light/dark
+  let palette = null, lastTint = "";
+  function hexToRgb(h) {
+    h = h.trim().replace("#", "");
+    if (h.length === 3) h = h.split("").map(x => x + x).join("");
+    const n = parseInt(h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function readPalette() {
+    const cs = getComputedStyle(document.documentElement);
+    palette = { bg: hexToRgb(cs.getPropertyValue("--bg")), warn: hexToRgb(cs.getPropertyValue("--warn")), stop: hexToRgb(cs.getPropertyValue("--stop")) };
+    lastTint = "";
+    drawTint();
+  }
+  function mix(a, b, k) {
+    return "rgb(" + a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(",") + ")";
+  }
+  readPalette();
+  try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readPalette); } catch (e) {}
 
   // ---------- GPS: speed + learning forward ----------
   function onPos(p) {
