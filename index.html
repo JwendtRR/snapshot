@@ -134,14 +134,12 @@ body.running #intro { display: none; }
 }
 body[data-level="1"] .gauge .fill { background: var(--warn); }
 body[data-level="2"] .gauge .fill { background: var(--stop); }
-.gauge .zero { position: absolute; left: 10px; right: 10px; top: 50%; height: 3px; margin-top: -1.5px; background: var(--ink); opacity: .5; }
+.gauge .fill { bottom: 0; }
 .gauge .mark { position: absolute; left: 0; right: 0; height: 2px; background: var(--ink); opacity: .35; }
 .gauge .mark.limit { height: 4px; background: var(--stop); opacity: .9; }
 
 .readout { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
-.readout .dir { font-size: 1rem; color: var(--muted); }
-.readout .dir.up::before { content: "▲ "; }
-.readout .dir.down::before { content: "▼ "; }
+.readout .scale { font-size: .9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 #num {
   font-size: clamp(5rem, 28vw, 8.5rem); font-weight: 900;
   line-height: .85; letter-spacing: -.04em; font-variant-numeric: tabular-nums;
@@ -203,16 +201,15 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     <div class="meter">
       <div class="gauge" id="gauge" aria-hidden="true">
         <div class="fill" id="fill"></div>
-        <div class="zero"></div>
       </div>
       <div class="readout">
-        <div class="dir up">Speeding up</div>
+        <div class="scale">10 mph/s</div>
         <div>
           <div id="num">0.0</div>
           <div id="unit">mph per second</div>
           <div id="dirText">Smooth</div>
         </div>
-        <div class="dir down">Slowing down</div>
+        <div class="scale">0</div>
       </div>
     </div>
 
@@ -289,13 +286,14 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
 
   // ---------- gauge ----------
   const RANGE = 10; // mph/s shown at each end
-  function pct(v) { return 50 - (Math.max(-RANGE, Math.min(RANGE, v)) / RANGE) * 50; }
+  // Distance from the top of the gauge, in %: 0 mph/s at the bottom, RANGE at the top
+  function pct(v) { return 100 - (Math.max(0, Math.min(RANGE, Math.abs(v))) / RANGE) * 100; }
   function drawMarks() {
     const g = $("gauge");
     g.querySelectorAll(".mark").forEach(m => m.remove());
-    [settings.warn, -settings.warn, settings.alert, -settings.alert, 7, -7].forEach((v, i) => {
+    [settings.warn, settings.alert, 7].forEach(v => {
       const m = document.createElement("div");
-      m.className = "mark" + (Math.abs(v) === 7 ? " limit" : "");
+      m.className = "mark" + (v === 7 ? " limit" : "");
       m.style.top = pct(v) + "%";
       g.appendChild(m);
     });
@@ -308,7 +306,9 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
       if (navigator.audioSession) navigator.audioSession.type = "playback";
     } catch (e) {}
     try {
-      if (!ctx || ctx.state === "closed") newContext();
+      // A paused ("interrupted") engine on iPhone often won't restart, so
+      // build a new one; this only works inside a real tap, which it is.
+      if (!ctx || ctx.state !== "running") newContext();
       ctx.resume();
       const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
       s.buffer = b; s.connect(ctx.destination); s.start(0);
@@ -321,9 +321,23 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     try { const k = ctx.createConstantSource(); k.offset.value = 0; k.connect(ctx.destination); k.start(); } catch (e) {}
   }
   const soundOk = () => !!ctx && ctx.state === "running";
-  // Any tap on the page counts as permission to restart sound
-  document.addEventListener("pointerdown", () => { if (running && !soundOk()) unlockAudio(); }, true);
-  $("soundFix").addEventListener("click", unlockAudio);
+  // Any tap on the page counts as permission to restart sound. iPhone only
+  // accepts the end of a tap (not the touch-down) as permission for sound.
+  document.addEventListener("touchend", () => { if (running && !soundOk()) unlockAudio(); }, true);
+  document.addEventListener("click", e => {
+    if (running && !soundOk() && e.target.id !== "soundFix") unlockAudio();
+  }, true);
+  let soundMsgUntil = 0;
+  $("soundFix").addEventListener("click", () => {
+    unlockAudio();
+    setTimeout(() => {
+      if (soundOk()) { tone(784, 0, 0.3, 0.3); }
+      else {
+        $("soundFix").textContent = "The phone is still blocking sound. Close this tab, open the page again, and tap Start.";
+        soundMsgUntil = performance.now() + 8000;
+      }
+    }, 400);
+  });
   function tone(freq, start, dur, vol, type) {
     if (!ctx) return;
     if (ctx.state !== "running") { try { ctx.resume(); } catch (e) {} }
@@ -349,11 +363,9 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     if (document.visibilityState === "hidden") { wasHidden = true; return; }
     if (!running) return;
     keepAwake();
-    // After the page has been in the background, iPhone audio can go silent
-    // while claiming to work, so start a fresh sound engine. If the phone
-    // wants a tap first, the yellow bar asks for one.
-    if (wasHidden) { wasHidden = false; try { newContext(); ctx.resume(); } catch (e) {} }
-    else if (ctx) ctx.resume();
+    // If the phone won't let sound restart on its own, the yellow bar asks for a tap
+    wasHidden = false;
+    if (ctx) { try { ctx.resume(); } catch (e) {} }
   });
 
   // ---------- motion processing ----------
@@ -530,22 +542,16 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     const mag = Math.abs(v);
     $("num").textContent = mag.toFixed(1);
     const fill = $("fill");
-    if (signKnown) {
-      const top = Math.min(pct(v), 50), bottom = Math.max(pct(v), 50);
-      fill.style.top = top + "%"; fill.style.height = (bottom - top) + "%";
-      $("dirText").textContent = mag < 1 ? "Smooth" : (v > 0 ? "Speeding up" : "Slowing down");
-    } else {
-      const off = (mag / RANGE) * 50;
-      fill.style.top = (50 - Math.min(50, off)) + "%";
-      fill.style.height = Math.min(100, off * 2) + "%";
-      $("dirText").textContent = mag < 1 ? "Smooth" : "Moving";
-    }
+    fill.style.height = (100 - pct(mag)) + "%";
+    $("dirText").textContent = mag < 1 ? "Smooth" : !signKnown ? "Moving" : (v > 0 ? "Speeding up" : "Slowing down");
     gpsFresh = performance.now() / 1000 - lastFixT < 2.5;
     const src = $("src");
     src.textContent = gpsFresh ? "GPS + sensors" : "Sensors only";
     src.className = "src " + (gpsFresh ? "gps" : "sensors");
     $("mode").textContent = directional ? "Ready" : "Learning forward…";
-    $("soundFix").hidden = !(settings.sound && !soundOk());
+    const showFix = settings.sound && !soundOk();
+    $("soundFix").hidden = !showFix;
+    if (!showFix || performance.now() > soundMsgUntil) $("soundFix").textContent = "Sound is paused. Tap here to turn it back on.";
     document.body.dataset.level = level;
     drawTint();
     $("cWarn").textContent = warnCount;
