@@ -140,8 +140,13 @@ body[data-level="2"] .gauge .fill { background: var(--stop); }
 
 .readout { flex: 1; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
 .readout .scale { font-size: .9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.numrow { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; }
+/* Debug readings: what each source says on its own. Not used by the gauge. */
+.debug { display: grid; grid-template-columns: auto auto; gap: 2px 8px; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.debug b { font-weight: 800; text-align: right; color: var(--muted); }
+.debug .used b, .debug .used span { color: var(--ink); }
 #num {
-  font-size: clamp(5rem, 28vw, 8.5rem); font-weight: 900;
+  font-size: clamp(4rem, 22vw, 8rem); font-weight: 900;
   line-height: .85; letter-spacing: -.04em; font-variant-numeric: tabular-nums;
 }
 #unit { font-size: 1.1rem; font-weight: 600; color: var(--muted); margin-top: 6px; }
@@ -205,7 +210,13 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
       <div class="readout">
         <div class="scale">10 mph/s</div>
         <div>
-          <div id="num">0.0</div>
+          <div class="numrow">
+            <div id="num">0.0</div>
+            <div class="debug" aria-label="Debug readings">
+              <span style="display:contents" id="dGpsRow"><span>GPS</span><b id="dGps">—</b></span>
+              <span style="display:contents" id="dSenRow"><span>Sensor</span><b id="dSen">0.0</b></span>
+            </div>
+          </div>
           <div id="unit">mph per second</div>
           <div id="dirText">Smooth</div>
         </div>
@@ -376,6 +387,7 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
   let gps = [];
   let value = 0, directional = false, signKnown = false;
   let gpsAccel = 0, gpsFresh = false, lastFixT = -99;
+  let sensorRaw = 0, usedSrc = "sensor"; // for the debug readout
   let level = 0, warnCount = 0, closeCount = 0, peak = 0;
   // Screen tint: holds the strongest level of the latest event, then fades out
   const FADE = 1.5; // seconds
@@ -425,16 +437,17 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     const fl = len(fwdAcc);
     directional = fwdCount >= 4 && fl > 0.5;
     let sensor = directional ? dot(hm, scale(fwdAcc, 1 / fl)) / MPHS : len(hm) / MPHS;
+    sensorRaw = sensor;
 
     gpsFresh = now - lastFixT < 2.5;
     if (gpsFresh) {
       // Can't lose more speed in a second than you have: going 3 mph, a
       // sudden stop is at most about 3 mph/s, whatever the jolt feels like.
       if (directional && sensor < 0) sensor = Math.max(sensor, -(recentMaxMph(now) + 1.5));
-      if (Math.abs(gpsAccel) > Math.abs(sensor)) { value = gpsAccel; signKnown = true; }
-      else { value = sensor; signKnown = directional; }
+      if (Math.abs(gpsAccel) > Math.abs(sensor)) { value = gpsAccel; signKnown = true; usedSrc = "gps"; }
+      else { value = sensor; signKnown = directional; usedSrc = "sensor"; }
     } else {
-      value = sensor; signKnown = directional;
+      value = sensor; signKnown = directional; usedSrc = "sensor";
     }
 
     evaluate(Math.abs(value));
@@ -549,6 +562,12 @@ input[type="range"] { width: 100%; accent-color: var(--calm); }
     src.textContent = gpsFresh ? "GPS + sensors" : "Sensors only";
     src.className = "src " + (gpsFresh ? "gps" : "sensors");
     $("mode").textContent = directional ? "Ready" : "Learning forward…";
+    // Debug: + is speeding up, − is slowing down; no sign until forward is learned
+    const fmt = (x, signed) => (signed ? (x > 0.05 ? "+" : x < -0.05 ? "−" : "") : "") + Math.abs(x).toFixed(1);
+    $("dGps").textContent = gpsFresh ? fmt(gpsAccel, true) : "—";
+    $("dSen").textContent = fmt(sensorRaw, directional);
+    $("dGpsRow").className = usedSrc === "gps" && gpsFresh ? "used" : "";
+    $("dSenRow").className = usedSrc === "sensor" || !gpsFresh ? "used" : "";
     const showFix = settings.sound && !soundOk();
     $("soundFix").hidden = !showFix;
     if (!showFix || performance.now() > soundMsgUntil) $("soundFix").textContent = "Sound is paused. Tap here to turn it back on.";
